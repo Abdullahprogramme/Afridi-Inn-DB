@@ -1,0 +1,1172 @@
+================================================================================
+     AFRIDI INN — RESTAURANT MANAGEMENT AND ONLINE ORDER TRACKING SYSTEM
+                          PROJECT INSTRUCTIONS
+================================================================================
+
+Course   : CS 341 Database Systems, Fall 2026 (Instructor: Abeera Tariq)
+Team     : Abdullah Tariq (29123) · Fatima Rizwan Lakhani (30614) ·
+           Huzaifa Iqbal (31563)
+Tech Stack: Next.js · TypeScript · Tailwind CSS · PostgreSQL (pgAdmin 4) ·
+            node-postgres (pg) · Simulated payments
+
+################################################################################
+## Project Description
+################################################################################
+
+The Afridi Inn Restaurant Management and Online Order Tracking System is a
+responsive, browser-based OLTP application for a multi-branch restaurant. It
+brings dine-in and online orders into ONE order workflow and covers: menu and
+price administration, order entry, butcher -> chef -> dispatch -> billing ->
+completion routing, authorised cancellation, simulated payment, customer
+order tracking, customer feedback and manager sales reporting.
+
+It is built for the CS 341 course project. The primary goal is to DEMONSTRATE
+database design: a normalised (3NF) PostgreSQL schema, CRUD operations,
+constraints, stored procedures, triggers and views, with every SQL query
+documented in the report. The web application exists to exercise that database.
+
+The system is based on the Milestone 1 report (interview with Junaid Afridi,
+manager of the Afridi Inn IBA branch). The real workflow is followed:
+  - Cashier sees online orders and enters dine-in orders.
+  - Meat items go to the BUTCHER first, then to the CHEF. Other items go
+    straight to the chef.
+  - Food goes to DISPATCH, the cashier generates the bill, the order is done.
+  - Cancellation needs a MANAGER or GRO approval (recorded with a reason).
+  - Only the OWNER can change menu categories, items, sizes, add-ons, prices.
+  - GRO manages numbered tables; numbers that are multiples of 10 are not used.
+  - Bill numbers restart at 1 every day per branch (e.g. KHI1-20261106-0001).
+
+Features NOT confirmed by the interview are "proposed extensions" and must be
+labelled as such in the UI notes and in the report: the online tracking token,
+the payment record, and the feedback rating.
+
+Users of the system:
+  - Customer (no account)  : browse menu, place online order, track it with a
+                             tracking token, leave feedback
+  - Owner                  : menu/price maintenance, branches, staff, all data
+  - Manager / General Mgr  : sales reports, approve cancellations
+  - Food & Beverage Mgr    : read-only monitoring of orders and menu
+  - GRO                    : tables, approve cancellations
+  - Cashier                : online order queue, dine-in entry, billing, payment
+  - Order Taker / Waiter   : create / modify dine-in orders
+  - Butcher                : butcher queue
+  - Chef                   : kitchen queue
+  - Dispatch               : ready orders, hand-over
+
+The product is a responsive web application. Every workflow must work on a
+desktop browser and on a phone browser (waiters, butchers and chefs use phones
+or tablets).
+
+The visual identity: warm, clean, professional. White cards on a warm off-white
+page, one confident burnt-orange primary colour, generous whitespace, readable
+type, gentle rounded corners, subtle shadows. NO GRADIENTS — every colour is a
+solid hex. Motion is minimal and done with Tailwind transitions only.
+
+HARD RULES (apply to the entire project):
+  1. FREE AND LOCAL ONLY. PostgreSQL + pgAdmin 4 run locally. No paid service,
+     no cloud account, no credit card anywhere.
+  2. PAYMENTS ARE SIMULATED. No payment gateway, no card numbers, no keys.
+     The cashier (or the online customer) picks a method (Cash / Card /
+     Online); the system records a dummy payment whose amount is the computed
+     bill total. Every payment screen shows a visible "SIMULATED PAYMENT"
+     badge.
+  3. ALL SQL IS RAW AND PARAMETERISED ($1, $2 ...). No ORM. Never build SQL by
+     string concatenation. This is a database course: the SQL is the product.
+  4. AUTHORISATION IS ENFORCED SERVER-SIDE (route handlers + role guards) and,
+     where possible, IN THE DATABASE (constraints, triggers). Hiding a button
+     is never treated as security.
+  5. ATOMIC LOGIC LIVES IN THE DATABASE. Order creation, status advancement,
+     cancellation and payment are stored procedures/functions that run in one
+     transaction. The app calls them; it does not re-implement the rules.
+  6. EVERY SCHEMA CHANGE IS A NUMBERED .sql FILE in db/. Never change the live
+     database by hand-editing in pgAdmin without saving the statement to a file.
+  7. Passwords are stored only as bcrypt hashes. No plain-text passwords.
+
+################################################################################
+## Authentication & Access Rules
+################################################################################
+
+Staff authentication (customers have NO accounts):
+  - Staff sign in with username + password (employee.username /
+    employee.password_hash). Hashing: bcryptjs, cost 10.
+  - On success the server issues a signed JWT (library: jose) with
+    { employee_id, role, branch_id } in an httpOnly, SameSite=Lax cookie,
+    8-hour expiry. No tokens in localStorage.
+  - middleware.ts protects /staff/** and redirects to /staff/login.
+  - Every route handler calls requireRole([...]) from src/lib/auth/guards.ts.
+  - Inactive employees (is_active = false) cannot sign in.
+  - Error messages are specific but safe: "Incorrect username or password".
+
+Branch scoping:
+  - Non-owner staff are tied to employee.branch_id. EVERY staff query is
+    filtered by that branch_id taken from the session, never from the request.
+  - Owner / head-office staff (branch_id NULL) may choose a branch from a
+    branch switcher and see all branches.
+
+Customer access:
+  - No login. An online order needs customer name + phone.
+  - Tracking is by tracking_token only (32 hex chars from gen_random_uuid()).
+    The /track/[token] page shows that single order's public status and
+    nothing else. No page lists or searches other customers' orders.
+
+------------------------------------------------------------------------
+Role Permission Matrix  (X = allowed)
+------------------------------------------------------------------------
+
+  Action                           OWN MGR FB  GRO CSH TKR/WTR BUT CHEF DSP
+  -------------------------------- --- --- --- --- --- ------- --- ---- ---
+  Manage menu/categories/sizes/add  X
+  Manage branches / staff           X
+  View menu                         X   X   X   X   X     X      X    X    X
+  Create dine-in order              X   X       X   X     X
+  See online orders / confirm       X   X           X
+  Modify order (before billing)     X   X       X   X     X
+  Butcher queue / mark done                                      X
+  Kitchen queue / mark ready                                          X
+  Dispatch / hand over                                                     X
+  Generate bill / record payment    X   X           X
+  Cancel order (APPROVER ONLY)          X       X                     (MANAGER or GRO)
+  Manage tables (status)            X           X
+  Sales report                      X   X   X
+  View feedback                     X   X   X
+
+  Cancellation: the actor requests it, but the approving employee_id stored in
+  customer_order.approved_by_employee_id MUST be a MANAGER or GRO (database
+  trigger checks this). A manager/GRO approves by entering their own username
+  and password in the cancel dialog (the "signature"), or is the logged-in user.
+
+################################################################################
+## Tech Stack
+################################################################################
+
+------------------------------------------------------------------------
+Core Framework
+------------------------------------------------------------------------
+
+  - Next.js (latest stable, App Router). Server components by default; client
+    components only for forms, carts, live-refreshing queues.
+  - TypeScript, strict mode.
+  - Route Handlers (src/app/api/**) for every write operation and every
+    client-side read. Server components may call src/lib/queries/* directly.
+  - next/font (Google Fonts, self-hosted at build time).
+
+------------------------------------------------------------------------
+Styling
+------------------------------------------------------------------------
+
+  - Tailwind CSS v4, design tokens in globals.css through @theme.
+  - lucide-react for icons.
+  - sonner for toast notifications.
+  - Hand-written small components in src/components/ui (Button, Card, Badge,
+    Input, Select, Dialog, Tabs, Table). No heavy UI kit. A <dialog> element or
+    a simple controlled modal is enough.
+  - No CSS-in-JS, no CSS modules.
+
+------------------------------------------------------------------------
+Animation (minimal)
+------------------------------------------------------------------------
+
+  - Tailwind transition utilities only (transition, duration-150/200,
+    ease-out). No animation library.
+  - Allowed: hover shadow/lift on clickable cards, fade for toasts and
+    dialogs, a simple opacity pulse for skeletons, progress-bar width
+    transition on the tracking page.
+  - Respect prefers-reduced-motion (motion-reduce: variants).
+
+------------------------------------------------------------------------
+Database (PostgreSQL 14+ with pgAdmin 4)
+------------------------------------------------------------------------
+
+  - PostgreSQL runs locally. pgAdmin 4 is the ONLY tool used to run the SQL
+    files, inspect data and take screenshots for the report.
+  - Database name: afridi_inn. Database timezone: Asia/Karachi
+      ALTER DATABASE afridi_inn SET timezone TO 'Asia/Karachi';
+  - Driver: pg (node-postgres) with a single shared Pool
+    (src/lib/db/pool.ts). Parameterised queries only.
+  - Transactions: stored procedures are called with
+    `SELECT sp_place_order($1, ...)` / `CALL ...`; multi-statement app logic
+    uses a withTransaction(client => ...) helper in src/lib/db/tx.ts.
+  - Postgres features demonstrated for the course: PRIMARY/FOREIGN/UNIQUE/
+    CHECK constraints, composite keys, triggers (PL/pgSQL), stored
+    functions/procedures, views, indexes, transactions, advisory locks.
+  - No ORM, no query builder (no Prisma, Drizzle, Knex, Sequelize).
+
+------------------------------------------------------------------------
+Payments (SIMULATED)
+------------------------------------------------------------------------
+
+  - No Stripe, no gateway, no external call.
+  - Flow: bill generated (order_status BILLED) -> cashier picks method ->
+    POST /api/orders/:id/pay -> sp_record_payment() inserts/updates the
+    payment row (status Paid, amount = order total from v_order_totals,
+    paid_at = now) -> order COMPLETED.
+  - Online orders: the customer picks "Online" at checkout; payment is a
+    Pending dummy payment, marked Paid when the cashier completes the order.
+  - Test data only. The UI shows a SIMULATED PAYMENT badge everywhere a
+    payment is shown.
+
+------------------------------------------------------------------------
+Forms, Data & Utilities
+------------------------------------------------------------------------
+
+  - react-hook-form + zod : forms and shared client/server validation
+  - date-fns + date-fns-tz : all dates shown in Asia/Karachi (PKT)
+  - bcryptjs               : password hashing
+  - jose                   : JWT sessions
+  - recharts               : one or two charts on the sales report (dynamic
+                             import)
+  - @tanstack/react-query  : OPTIONAL, only for polling queues (butcher, chef,
+                             dispatch, cashier). Plain fetch + setInterval
+                             (5 s) is acceptable instead.
+
+------------------------------------------------------------------------
+Quality & Testing
+------------------------------------------------------------------------
+
+  - ESLint + Prettier + TypeScript strict
+  - Vitest   : unit tests for utilities (money formatting, validators, status
+               transition map)
+  - SQL tests: db/05_test_queries.sql — run in pgAdmin; each test states the
+               expected result (constraint violations must FAIL, valid inserts
+               must succeed). Screenshots go in the report.
+  - Manual end-to-end script for the demo video (see Order of Work).
+
+------------------------------------------------------------------------
+Deployment & Tooling (all free)
+------------------------------------------------------------------------
+
+  - Runs locally: `npm run dev` + local PostgreSQL. Deployment is NOT required
+    by the course; the submission is a ZIP + SQL script + report + 2-3 min
+    video.
+  - GitHub (version control) · Trello or similar (task board)
+  - dbdiagram.io / pgAdmin ERD tool (schema diagram) · Figma or Excalidraw
+    (wireframes for the report)
+  - Secrets only in .env.local (gitignored). .env.example lists keys with
+    empty values.
+
+------------------------------------------------------------------------
+Libraries / Approaches Explicitly NOT Used
+------------------------------------------------------------------------
+
+  - Any ORM or query builder; any NoSQL store; Supabase / Firebase
+  - Stripe or any real payment API
+  - Framer Motion / GSAP / any animation library
+  - Redux or other global stores
+  - Social login; customer accounts
+  - Native mobile frameworks
+
+################################################################################
+## Colour Palette & Design System
+################################################################################
+
+------------------------------------------------------------------------
+Design Philosophy
+------------------------------------------------------------------------
+
+  Warm, simple, professional. A light interface that feels like a modern
+  restaurant dashboard: calm, scannable, easy to use with greasy hands on a
+  phone. One primary burnt-orange carries all interactive emphasis. Semantic
+  colours (green / amber / red / blue) appear only to communicate state — order
+  status, table status, validation. NO GRADIENTS.
+
+------------------------------------------------------------------------
+Primary Palette (light theme)
+------------------------------------------------------------------------
+
+  --bg-base         : #FAF7F2   /* Page background                          */
+  --bg-surface      : #FFFFFF   /* Cards, panels, forms                     */
+  --bg-subtle       : #F3EEE6   /* Table stripes, inputs (disabled), chips  */
+  --bg-inverse      : #1C1917   /* Footer, staff sidebar, kitchen screens   */
+
+  --text-primary    : #1C1917   /* Headings, primary content                */
+  --text-secondary  : #57534E   /* Body text, descriptions                  */
+  --text-muted      : #78716C   /* Metadata, placeholders (not for key info)*/
+  --text-on-primary : #FFFFFF   /* Text on primary buttons                  */
+
+  --primary         : #C2410C   /* Primary actions, links, active states    */
+  --primary-dark    : #9A3412   /* Hover / pressed                          */
+  --primary-soft    : #FFEDD5   /* Selected rows, soft badges, focus halo   */
+
+  --border-default  : #E7E0D6   /* Card borders, dividers                   */
+  --border-strong   : #D6CEC2   /* Input borders                            */
+  --border-focus    : #C2410C   /* Focus ring colour                        */
+
+------------------------------------------------------------------------
+Semantic Colours
+------------------------------------------------------------------------
+
+  --color-success   : #15803D   /* Completed, paid, available, valid        */
+  --color-success-bg: #DCFCE7
+  --color-warning   : #A16207   /* In butcher/chef stage, reserved, pending */
+  --color-warning-bg: #FEF9C3
+  --color-error     : #B91C1C   /* Cancelled, failed, validation errors     */
+  --color-error-bg  : #FEE2E2
+  --color-info      : #0369A1   /* Notices, SIMULATED PAYMENT badge, online */
+  --color-info-bg   : #E0F2FE
+
+------------------------------------------------------------------------
+Status Badge Map  (icon + text on every badge — never colour alone)
+------------------------------------------------------------------------
+
+  Order status
+    PLACED       #0369A1 on #E0F2FE   (awaiting cashier confirmation)
+    AT_BUTCHER   #A16207 on #FEF9C3
+    AT_CHEF      #A16207 on #FEF9C3
+    READY        #9A3412 on #FFEDD5
+    DISPATCHED   #0369A1 on #E0F2FE
+    BILLED       #9A3412 on #FFEDD5
+    COMPLETED    #15803D on #DCFCE7
+    CANCELLED    #B91C1C on #FEE2E2
+  Table status
+    Available #15803D/#DCFCE7 · Occupied #B91C1C/#FEE2E2 ·
+    Reserved #A16207/#FEF9C3 · Billing #9A3412/#FFEDD5
+  Payment status
+    Pending #A16207/#FEF9C3 · Paid #15803D/#DCFCE7 · Failed #B91C1C/#FEE2E2
+  Channel
+    DINE_IN #57534E on #F3EEE6 · ONLINE #0369A1 on #E0F2FE
+  SIMULATED PAYMENT badge: #0369A1 on #E0F2FE
+
+------------------------------------------------------------------------
+Colour Usage Rules
+------------------------------------------------------------------------
+
+  Primary (#C2410C) is used on the ONE main call-to-action per screen (Place
+  order, Send to kitchen, Mark done, Generate bill), links, active nav item,
+  focus rings and selected chips. Semantic colours only for status. Pure black
+  is never used; #1C1917 is the darkest colour. Text must meet WCAG AA (4.5:1).
+
+------------------------------------------------------------------------
+Typography
+------------------------------------------------------------------------
+
+  Headings : 'Plus Jakarta Sans', sans-serif (600 / 700)
+  Body / UI: 'Inter', sans-serif (400 / 500)
+  Mono     : 'JetBrains Mono', monospace (400 / 500) — bill numbers, tracking
+             tokens, prices in tables, NIC
+
+  Loaded with next/font/google. Scale: text-xs 12 · text-sm 14 · text-base 16
+  · text-lg 18 · text-xl 20 · text-2xl 24 · text-4xl 36 (page titles).
+
+------------------------------------------------------------------------
+Spacing, Shape & Layout
+------------------------------------------------------------------------
+
+  Page max-width   : max-w-7xl centred, px-4 sm:px-6 lg:px-8
+  Card padding     : p-5 · Grid gap: gap-4 / gap-6
+  Radius           : rounded-lg cards, rounded-md buttons/inputs,
+                     rounded-full badges/avatars only
+  Border           : 1px solid #E7E0D6 on cards
+  Shadow           : shadow-sm rest, shadow-md hover (clickable cards only)
+  Tap target       : minimum 44 x 44 px (kitchen screens: 56 px buttons)
+
+------------------------------------------------------------------------
+Core UI Components
+------------------------------------------------------------------------
+
+  Button  : primary (solid orange), secondary (white + border), ghost,
+            destructive (solid #B91C1C). Loading = spinner + disabled.
+  Card    : white, border, rounded-lg.
+  Badge   : small pill, soft background + matching text + icon.
+  Input   : h-11, border-strong, focus ring primary, label ALWAYS visible
+            above, error text in --color-error below.
+  Table   : used for staff lists; below 768px becomes stacked cards.
+  Empty state : icon + one sentence + one action.
+  Skeleton: solid #F3EEE6 blocks with opacity pulse.
+  Money   : always "PKR 1,250" via one formatMoney() helper; mono font in
+            tables.
+
+------------------------------------------------------------------------
+Responsive Behaviour
+------------------------------------------------------------------------
+
+  Breakpoints: 320 · 640 · 768 · 1024 · 1440.
+  Mobile (<768px): staff sidebar becomes a bottom tab bar / menu sheet; tables
+  become cards; cart is a sticky bottom bar; queue cards are full width with
+  large action buttons. No essential information hidden or truncated.
+
+################################################################################
+## Data Model (PostgreSQL)  — from Milestone 1
+################################################################################
+
+13 tables (see db/01_tables.sql for the exact DDL):
+
+  branch              branch_id PK · branch_code UQ · branch_name · phone ·
+                      address · is_active
+  employee            employee_id PK · branch_id FK(null) · full_name · nic UQ ·
+                      role · staff_level · username UQ* · password_hash* ·
+                      is_active
+  menu_category       category_id PK · category_name UQ · description · is_active
+  menu_item           menu_item_id PK · category_id FK · item_name ·
+                      description · requires_butcher · is_available
+  menu_item_size      size_id PK · menu_item_id FK · size_label · price
+  add_on              add_on_id PK · add_on_name UQ · price · is_available
+  restaurant_table    table_id PK · branch_id FK · table_no · capacity · status
+  customer            customer_id PK · customer_name · phone UQ · created_at
+  customer_order      order_id PK · branch_id FK · customer_id FK(null) ·
+                      table_id FK(null) · created_by / assigned_butcher /
+                      assigned_chef / dispatched_by / cashier / approved_by
+                      (six employee FKs, all null) · order_channel ·
+                      order_date · daily_order_number · bill_number UQ ·
+                      tracking_token UQ(null) · order_status ·
+                      special_instructions · cancellation_reason ·
+                      created_at · updated_at
+  order_item          order_item_id PK · order_id FK · size_id FK · quantity ·
+                      unit_price_at_order · line_status · item_notes
+  order_item_add_on   (order_item_id, add_on_id) composite PK · quantity ·
+                      unit_price_at_order
+  customer_feedback   feedback_id PK · customer_id FK · order_id FK(null) ·
+                      rating 1-5 · comments · submitted_at
+  payment             payment_id PK · order_id FK UQ · method_name ·
+                      payment_status · amount* · paid_at*
+
+  * = small additions to the Milestone 1 schema (login credentials for staff,
+      dummy payment amount/time). Mention them in the report's schema section.
+  Also added: UNIQUE(branch_id, table_no) and UNIQUE(menu_item_id, size_label).
+
+------------------------------------------------------------------------
+Allowed Values (CHECK constraints)
+------------------------------------------------------------------------
+
+  employee.role    : OWNER, MANAGER, FB_MANAGER, GRO, ORDER_TAKER, WAITER,
+                     CASHIER, CHEF, BUTCHER, DISPATCH
+  staff_level      : Senior, Junior
+  order_channel    : DINE_IN, ONLINE
+  order_status     : PLACED, AT_BUTCHER, AT_CHEF, READY, DISPATCHED, BILLED,
+                     COMPLETED, CANCELLED
+  line_status      : PENDING, AT_BUTCHER, BUTCHER_DONE, COOKING, READY,
+                     CANCELLED
+  table status     : Available, Occupied, Reserved, Billing
+  payment method   : Cash, Card, Online
+  payment status   : Pending, Paid, Failed
+
+------------------------------------------------------------------------
+Order Workflow (status transitions)
+------------------------------------------------------------------------
+
+  DINE-IN   created by staff -> goes straight to the kitchen:
+            AT_BUTCHER (if any line requires_butcher) or AT_CHEF
+  ONLINE    created by customer -> PLACED (cashier must confirm) ->
+            AT_BUTCHER or AT_CHEF
+  Then      AT_BUTCHER -> (butcher marks lines BUTCHER_DONE) -> AT_CHEF ->
+            (chef marks lines READY) -> READY -> DISPATCHED (dispatch hands
+            over) -> BILLED (cashier generates bill) -> COMPLETED (payment
+            recorded)
+  Cancel    any status before COMPLETED -> CANCELLED (approver + reason)
+
+  Line flow  : requires_butcher lines  PENDING -> AT_BUTCHER -> BUTCHER_DONE
+                                       -> COOKING -> READY
+               other lines             PENDING -> COOKING -> READY
+  The order status rolls up from its lines inside sp_advance_line().
+
+------------------------------------------------------------------------
+Stored Procedures / Functions (db/02 and db/03)
+------------------------------------------------------------------------
+
+  sp_place_order(branch_id, channel, table_id, customer_name, customer_phone,
+                 employee_id, instructions, items jsonb) RETURNS order_id
+    - upserts the customer by phone (online orders)
+    - inserts customer_order (numbers/token filled by trigger)
+    - for each item: looks up the CURRENT price from menu_item_size / add_on
+      and stores it as unit_price_at_order (price snapshot); sets line_status
+      by requires_butcher; inserts order_item_add_on rows
+    - sets initial order_status (PLACED for online, else AT_BUTCHER/AT_CHEF)
+    - sets the table to Occupied for dine-in
+    - items jsonb: [{size_id, quantity, notes, add_ons:[{add_on_id,quantity}]}]
+  sp_confirm_online_order(order_id, cashier_id)
+  sp_advance_line(order_item_id, new_status, employee_id)
+    - validates the transition, records butcher/chef employee, rolls up the
+      order status
+  sp_dispatch_order(order_id, employee_id)
+  sp_generate_bill(order_id, cashier_id)      -> status BILLED, table 'Billing'
+  sp_record_payment(order_id, method, cashier_id)  -> simulated; status
+                                                  COMPLETED, table 'Available'
+  sp_cancel_order(order_id, approver_id, reason)   -> CANCELLED, lines
+                                                  CANCELLED, table freed
+
+------------------------------------------------------------------------
+Triggers (db/02)
+------------------------------------------------------------------------
+
+  trg_assign_order_number   BEFORE INSERT on customer_order
+      - takes pg_advisory_xact_lock(branch_id, yyyymmdd) so concurrent orders
+        cannot get the same number
+      - daily_order_number = MAX(...)+1 for (branch, order_date)
+      - bill_number = BRANCHCODE-YYYYMMDD-NNNN
+      - tracking_token = replace(gen_random_uuid()::text,'-','') for ONLINE
+  trg_check_cancel_approver BEFORE INSERT/UPDATE on customer_order
+      - if approved_by_employee_id is set, that employee must be an active
+        MANAGER or GRO
+  trg_set_updated_at        BEFORE UPDATE on customer_order
+  trg_block_edit_after_bill BEFORE INSERT/UPDATE/DELETE on order_item
+      - items cannot change once the order is BILLED/COMPLETED/CANCELLED
+  trg_owner_only_menu       OPTIONAL (app-level role check is mandatory;
+      a DB trigger using a session variable `app.employee_role` is a bonus)
+
+------------------------------------------------------------------------
+Views (db/03)
+------------------------------------------------------------------------
+
+  v_order_totals   order_id, items_total, add_ons_total, grand_total
+  v_menu_full      category, item, size, price, requires_butcher, available
+  v_butcher_queue  order lines at AT_BUTCHER with order/table info
+  v_kitchen_queue  order lines needing the chef
+  v_sales_report   date, branch, item, size, qty sold, revenue (COMPLETED only)
+  v_order_tracking public-safe columns only (bill_number, status, channel,
+                   created_at, tracking_token) — no phone, no employee data
+
+------------------------------------------------------------------------
+Default Business Rules (decisions taken so the build is unblocked; each lives
+in src/lib/constants.ts and/or the SQL and can be changed without redesign)
+------------------------------------------------------------------------
+
+  - Business date    : Asia/Karachi calendar date.
+  - Bill total       : sum(quantity * unit_price_at_order) + add-ons
+                       (quantity * unit_price_at_order). No tax/service charge
+                       (not confirmed by the interview).
+  - Modify order     : allowed until BILLED. Lines may be added/removed/changed
+                       (quantity, notes) while the order is not billed.
+  - Cancellation     : allowed before COMPLETED; needs approver + reason
+                       (min 5 characters). No refund logic (payments are dummy).
+  - Menu deletion    : items/categories with order history are DEACTIVATED
+                       (is_available / is_active = false), never deleted.
+  - Price changes    : affect only future orders (snapshots protect history).
+  - Online order     : customer supplies name + phone; the same phone re-uses
+                       the existing customer row.
+  - Tracking page    : shows a 6-step progress bar mapped from order_status.
+  - Feedback         : one per customer per order; allowed once the order is
+                       COMPLETED; reached from the tracking page.
+  - Seed accounts    : every demo user shares the password "Afridi@2026"
+                       (bcrypt-hashed in seed). Change before any real use.
+
+################################################################################
+## Folder Structure
+################################################################################
+
+  afridi-inn/
+  ├── db/
+  │   ├── 01_tables.sql               # Tables, constraints, indexes (STEP 1)
+  │   ├── 02_triggers_functions.sql   # Triggers + trigger functions
+  │   ├── 03_procedures_views.sql     # Stored procedures + views
+  │   ├── 04_seed.sql                 # Branches, staff, menu, tables, orders
+  │   ├── 05_test_queries.sql         # Constraint / trigger / procedure tests
+  │   └── README.md                   # Run order + pgAdmin instructions
+  │
+  ├── docs/                           # Report assets
+  │   ├── er-diagram.png
+  │   ├── schema-diagram.png
+  │   ├── wireframes/
+  │   ├── flow-diagram.png
+  │   └── screenshots/                # pgAdmin + app screenshots
+  │
+  ├── public/
+  │   └── logo.svg
+  │
+  ├── src/
+  │   ├── app/
+  │   │   ├── layout.tsx              # Root layout, fonts, toaster
+  │   │   ├── page.tsx                # Public landing + menu preview
+  │   │   ├── menu/page.tsx           # Public full menu
+  │   │   ├── order/page.tsx          # Online order (cart + checkout)
+  │   │   ├── order/confirmed/page.tsx
+  │   │   ├── track/page.tsx          # Enter tracking token
+  │   │   ├── track/[token]/page.tsx  # Order progress
+  │   │   ├── feedback/[token]/page.tsx
+  │   │   ├── staff/
+  │   │   │   ├── login/page.tsx
+  │   │   │   ├── page.tsx                    # Role-based home
+  │   │   │   ├── orders/page.tsx             # Order list / cashier queue
+  │   │   │   ├── orders/new/page.tsx         # Dine-in order entry
+  │   │   │   ├── orders/[id]/page.tsx        # Detail, modify, cancel
+  │   │   │   ├── butcher/page.tsx
+  │   │   │   ├── kitchen/page.tsx
+  │   │   │   ├── dispatch/page.tsx
+  │   │   │   ├── tables/page.tsx
+  │   │   │   ├── billing/[id]/page.tsx       # Bill + simulated payment
+  │   │   │   ├── reports/page.tsx            # Sales report + feedback
+  │   │   │   ├── menu/page.tsx               # Owner: categories/items/sizes
+  │   │   │   ├── add-ons/page.tsx            # Owner
+  │   │   │   ├── employees/page.tsx          # Owner
+  │   │   │   └── branches/page.tsx           # Owner
+  │   │   └── api/
+  │   │       ├── auth/login/route.ts         # POST
+  │   │       ├── auth/logout/route.ts        # POST
+  │   │       ├── menu/route.ts               # GET public menu
+  │   │       ├── menu/categories/route.ts    # GET, POST, PATCH (owner)
+  │   │       ├── menu/items/route.ts         # GET, POST, PATCH (owner)
+  │   │       ├── menu/sizes/route.ts         # POST, PATCH (owner)
+  │   │       ├── menu/add-ons/route.ts       # GET, POST, PATCH (owner)
+  │   │       ├── orders/route.ts             # GET list, POST dine-in
+  │   │       ├── orders/online/route.ts      # POST public online order
+  │   │       ├── orders/[id]/route.ts        # GET, PATCH (modify)
+  │   │       ├── orders/[id]/confirm/route.ts
+  │   │       ├── orders/[id]/lines/[lineId]/route.ts   # PATCH advance line
+  │   │       ├── orders/[id]/dispatch/route.ts
+  │   │       ├── orders/[id]/bill/route.ts
+  │   │       ├── orders/[id]/pay/route.ts    # Simulated payment
+  │   │       ├── orders/[id]/cancel/route.ts
+  │   │       ├── tracking/[token]/route.ts   # GET public status
+  │   │       ├── tables/route.ts             # GET, PATCH
+  │   │       ├── reports/sales/route.ts      # GET
+  │   │       ├── feedback/route.ts           # GET (staff), POST (public)
+  │   │       ├── employees/route.ts          # GET, POST, PATCH (owner)
+  │   │       └── branches/route.ts           # GET, POST, PATCH (owner)
+  │   │
+  │   ├── components/
+  │   │   ├── layout/    # PublicHeader, StaffSidebar, MobileTabBar, Footer
+  │   │   ├── ui/        # Button, Card, Badge, Input, Select, Dialog, Tabs,
+  │   │   │              # Table
+  │   │   ├── menu/      # MenuGrid, CategoryTabs, ItemCard, SizePicker,
+  │   │   │              # AddOnPicker
+  │   │   ├── orders/    # Cart, OrderCard, OrderTable, OrderForm,
+  │   │   │              # StatusStepper, CancelDialog
+  │   │   ├── kitchen/   # QueueCard, LineActionButton
+  │   │   ├── billing/   # BillSummary, PaymentPanel
+  │   │   ├── reports/   # SalesTable, RevenueChart, FilterBar
+  │   │   └── shared/    # StatusBadge, EmptyState, SectionHeader, Skeleton,
+  │   │                  # SimulatedPaymentBadge
+  │   │
+  │   ├── lib/
+  │   │   ├── db/        # pool.ts, tx.ts
+  │   │   ├── queries/   # branch.ts, employee.ts, menu.ts, tables.ts,
+  │   │   │              # customer.ts, orders.ts, payments.ts, feedback.ts,
+  │   │   │              # reports.ts  (ALL SQL lives here)
+  │   │   ├── auth/      # session.ts (jose), guards.ts, roles.ts, password.ts
+  │   │   ├── validators/# zod schemas shared by forms and routes
+  │   │   ├── constants.ts   # status maps, role map, money format, rules
+  │   │   └── utils.ts
+  │   ├── hooks/         # usePolling, useCart
+  │   ├── types/         # domain types
+  │   ├── middleware.ts  # Staff route protection
+  │   └── styles/globals.css   # CSS variables, @theme tokens
+  │
+  ├── tests/
+  │   └── unit/          # Vitest
+  │
+  ├── .env.local
+  ├── .env.example
+  ├── next.config.ts
+  └── package.json
+
+  SQL DOCUMENTATION RULE: every function in src/lib/queries/*.ts must carry a
+  comment block — Screen: / Purpose: / CRUD: / Tables: — directly above its SQL.
+  This makes Report Section 7 (screen-by-screen SQL) a copy-paste job.
+
+################################################################################
+## Environment Variables
+################################################################################
+
+  DATABASE_URL=postgresql://postgres:YOUR_PASSWORD@localhost:5432/afridi_inn
+  SESSION_SECRET=            # 32+ random characters, used to sign JWTs
+  NEXT_PUBLIC_APP_URL=http://localhost:3000
+  DEFAULT_BRANCH_CODE=KHI1   # used by public online ordering
+
+  Rules: only NEXT_PUBLIC_ variables reach the browser. DATABASE_URL and
+  SESSION_SECRET are server-only. .env.local is never committed.
+
+################################################################################
+## Pages & Components (Layout · Interaction · Colour Scheme)
+################################################################################
+
+------------------------------------------------------------------------
+1. Global Shell — Public Header, Staff Sidebar, Footer
+------------------------------------------------------------------------
+
+LAYOUT:
+  Public header (sticky, h-16, white, bottom border #E7E0D6): logo mark +
+  "Afridi Inn" wordmark left; Menu · Order online · Track order centre;
+  "Staff login" ghost button right. Mobile: logo + menu sheet.
+  Staff shell: left sidebar (bg #1C1917, text #D6CEC2, active item bg #292524
+  with a #C2410C left bar) showing only the links the role may use; header
+  strip with branch name, user name + role badge, Logout. Mobile: bottom tab
+  bar with the 4 most-used links + "More" sheet.
+  Footer (public): bg #1C1917, text #A8A29E; branch addresses and phone numbers
+  (read from branch table), "CS 341 Database Systems project — IBA Karachi".
+
+INTERACTION: link colour transition 150ms; sheet slides in with a Tailwind
+  transform transition; focus ring 2px #C2410C.
+COLOUR: as in the design system; active nav #C2410C (public) / #1C1917 on
+  #FFEDD5 (staff).
+
+------------------------------------------------------------------------
+2. Landing & Public Menu  ( / and /menu )
+------------------------------------------------------------------------
+
+LAYOUT:
+  Hero: heading "Fresh from the Afridi Inn kitchen", lead text, buttons
+  "Order online" (primary) and "Track my order" (secondary). Below: category
+  chips (Mutton, Beef, Chicken, Fish, Beverages, Continental, Chinese,
+  Afghani, ...) and a grid of ItemCards.
+  /menu: full menu grouped by category; sticky category tabs; search box.
+  ItemCard: name, description, "from PKR X" (lowest size price), size count,
+  badge "Contains meat — prepared fresh" is NOT shown (internal flag).
+  Unavailable items are greyed with an "Unavailable" badge.
+SQL: v_menu_full / menu_category + menu_item + menu_item_size (READ).
+CRUD: Read.
+COLOUR: cards #FFFFFF / #E7E0D6, price #C2410C, category chip selected
+  #FFEDD5 / #9A3412.
+
+------------------------------------------------------------------------
+3. Online Order  ( /order )
+------------------------------------------------------------------------
+
+LAYOUT:
+  Two columns on desktop: left = menu with category tabs; each ItemCard opens
+  a Dialog to choose SIZE (radio), ADD-ONS (checkbox + quantity) and notes,
+  then "Add to cart". Right = Cart card (lines, quantity steppers, add-on
+  lines, per-line total, order total), special instructions textarea,
+  customer name + phone (required), payment method (Online / Cash on
+  delivery shown as Cash), SIMULATED PAYMENT badge, "Place order" (primary).
+  Mobile: cart is a sticky bottom bar opening a sheet.
+  Validation (zod): name 2-100 chars, phone Pakistani format (03XX-XXXXXXX or
+  +92...), at least one item.
+  Success page /order/confirmed: bill number (mono), tracking token (mono)
+  with Copy button, "Track my order" button. Token is shown ONCE and also in
+  the URL of the tracking button.
+SQL: v_menu_full (READ) · sp_place_order(...) (CREATE customer/order/items/
+  add-ons).
+COLOUR: cart card #FFFFFF; total #1C1917 bold; SIMULATED badge #0369A1 on
+  #E0F2FE; success accent #15803D on #DCFCE7.
+
+------------------------------------------------------------------------
+4. Track Order & Feedback  ( /track, /track/[token], /feedback/[token] )
+------------------------------------------------------------------------
+
+LAYOUT:
+  /track: one input (tracking code) + "Track" button.
+  /track/[token]: card with bill number (mono), placed time, channel badge,
+  and a horizontal StatusStepper (mobile: vertical):
+     Received -> Preparing -> Ready -> On the way/Served -> Billed -> Done
+  mapped from order_status (AT_BUTCHER and AT_CHEF both show "Preparing").
+  Item list (name, size, qty, add-ons) and total. CANCELLED shows a red banner
+  with the cancellation reason. Auto-refreshes every 10 s.
+  Shows ONLY the public-safe view (v_order_tracking): no phone, no staff names.
+  When COMPLETED: "Rate your order" card -> /feedback/[token]: 5-star radio
+  group (keyboard accessible) + optional comment (500 chars) + Submit.
+  One feedback per order; a thank-you state replaces the form.
+SQL: v_order_tracking + order items (READ) · INSERT customer_feedback (CREATE).
+COLOUR: stepper done #15803D, current #C2410C, upcoming #D6CEC2; selected
+  star #A16207; banner as error semantic.
+
+------------------------------------------------------------------------
+5. Staff Login  ( /staff/login )
+------------------------------------------------------------------------
+
+LAYOUT:
+  Centred card (max-w-md): logo, username, password (show/hide), "Sign in".
+  Errors inline in #FEE2E2 / #B91C1C. After login, redirect to /staff.
+SQL: SELECT employee by username (READ); compare bcrypt hash in the app.
+COLOUR: card #FFFFFF; button #C2410C.
+
+------------------------------------------------------------------------
+6. Staff Home  ( /staff )
+------------------------------------------------------------------------
+
+LAYOUT:
+  Role-based landing. StatCards: orders today, active orders, completed today,
+  revenue today (simulated). Role-specific shortcut cards:
+    Cashier -> Online queue · New dine-in order · Billing
+    Waiter/Order taker -> New dine-in order · My orders
+    Butcher -> Butcher queue · Chef -> Kitchen queue · Dispatch -> Dispatch
+    GRO -> Tables · Manager -> Reports · Owner -> Menu, Staff, Branches
+  Recent orders list (last 10).
+SQL: aggregates on customer_order + v_order_totals filtered by branch + today.
+COLOUR: StatCards #FFFFFF; numbers #1C1917; labels #57534E.
+
+------------------------------------------------------------------------
+7. Order List, Online Queue & Dine-in Entry
+   ( /staff/orders, /staff/orders/new )
+------------------------------------------------------------------------
+
+LAYOUT:
+  Orders list: tabs Active · Online (PLACED) · Completed · Cancelled; table
+  (Bill no., channel badge, table no., status badge, total, time, actions);
+  stacked cards on mobile. Online PLACED orders get a "Confirm" button
+  (sp_confirm_online_order).
+  New dine-in order: Step layout in one page — choose table (grid of
+  Available/Occupied chips; multiples of 10 do not exist), pick items (same
+  menu picker as online order), cart, notes, "Send to kitchen" (primary).
+  The cart footer shows live total.
+SQL: SELECT list (READ) · sp_place_order (CREATE) · sp_confirm_online_order
+  (UPDATE) · SELECT tables (READ).
+COLOUR: status badges per map; selected table #FFEDD5 border #C2410C.
+
+------------------------------------------------------------------------
+8. Order Detail, Modify & Cancel  ( /staff/orders/[id] )
+------------------------------------------------------------------------
+
+LAYOUT:
+  Header: bill number (mono), channel, table, status badge, StatusStepper.
+  Left: lines (item, size, qty, add-ons, notes, line status badge). Right:
+  customer card (online), staff involved (butcher, chef, dispatcher, cashier),
+  totals card. Actions (role-gated): Add item / Change quantity / Remove line
+  (only before BILLED), Generate bill, Cancel order.
+  Cancel dialog: reason (min 5 chars), approver username + password (the
+  "signature"), warning summary, destructive button. The server verifies the
+  approver is a MANAGER or GRO; the DB trigger re-checks.
+SQL: order + lines + add-ons (READ) · INSERT/UPDATE/DELETE order_item (modify)
+  · sp_cancel_order (UPDATE).
+COLOUR: destructive #B91C1C; warning summary #A16207 on #FEF9C3.
+
+------------------------------------------------------------------------
+9. Butcher Queue  ( /staff/butcher )
+------------------------------------------------------------------------
+
+LAYOUT:
+  Dark-friendly large cards (bg #1C1917, text #FAF7F2 optional "kitchen
+  mode"): each card = bill no., table or ONLINE, time waiting, meat lines
+  (item, size, qty, notes). Big button "Start" (AT_BUTCHER -> in progress is
+  implicit) and "Mark done" per line; when all meat lines are done the order
+  moves to AT_CHEF. Polls every 5 s. Oldest first.
+SQL: v_butcher_queue (READ) · sp_advance_line (UPDATE).
+COLOUR: card #FFFFFF or #292524; waiting > 15 min shows #A16207 badge.
+
+------------------------------------------------------------------------
+10. Kitchen Queue  ( /staff/kitchen )
+------------------------------------------------------------------------
+
+LAYOUT:
+  Same card pattern as the butcher queue. Lines appear when ready for the chef
+  (non-meat lines immediately; meat lines after BUTCHER_DONE). Buttons
+  "Start cooking" (COOKING) and "Mark ready" (READY). When every line is READY
+  the order becomes READY and appears on the dispatch screen.
+SQL: v_kitchen_queue (READ) · sp_advance_line (UPDATE).
+
+------------------------------------------------------------------------
+11. Dispatch  ( /staff/dispatch )
+------------------------------------------------------------------------
+
+LAYOUT:
+  List of READY orders (table / online, items count, time ready) with
+  "Hand over" button -> sp_dispatch_order. Online orders show customer name
+  and phone for delivery/pickup handover.
+SQL: SELECT READY orders (READ) · sp_dispatch_order (UPDATE).
+
+------------------------------------------------------------------------
+12. Tables  ( /staff/tables )
+------------------------------------------------------------------------
+
+LAYOUT:
+  Grid of table tiles (number, capacity, status badge, current bill no.).
+  GRO can change status (Available / Reserved) and add/edit a table (number
+  validated: positive, not a multiple of 10, unique per branch; capacity > 0).
+  Occupied/Billing are set by the order procedures, not manually.
+SQL: SELECT/INSERT/UPDATE restaurant_table.
+CRUD: Create, Read, Update.
+
+------------------------------------------------------------------------
+13. Billing & Simulated Payment  ( /staff/billing/[id] )
+------------------------------------------------------------------------
+
+LAYOUT:
+  Printable bill card: branch name/address/phone, bill number (mono), date,
+  table/channel, line items with sizes, add-ons, quantities, unit prices,
+  line totals, grand total (PKR). Right panel: PaymentPanel — SIMULATED PAYMENT
+  badge, method selector (Cash / Card / Online), amount (read-only, equals
+  grand total), "Record payment" (primary). After success: Paid badge, order
+  COMPLETED, "Print bill" button (window.print with a print stylesheet).
+SQL: v_order_totals + lines (READ) · sp_generate_bill (UPDATE) ·
+  sp_record_payment (CREATE/UPDATE payment).
+COLOUR: bill card #FFFFFF; badge #0369A1 on #E0F2FE; Paid #15803D on #DCFCE7.
+
+------------------------------------------------------------------------
+14. Sales Report & Feedback  ( /staff/reports )
+------------------------------------------------------------------------
+
+LAYOUT:
+  Filters: Branch (owner only) · From–To date · Channel · Category.
+  StatCards: Orders, Revenue (simulated), Average order value, Cancelled.
+  Tabs: Sales by item (table: item, size, quantity sold, revenue) · Daily
+  revenue (recharts line/bar) · Orders (detail rows, click to open) ·
+  Feedback (average rating + recent comments). Export CSV.
+SQL: v_sales_report with GROUP BY / date filters (READ) · aggregates on
+  customer_feedback.
+CRUD: Read.
+COLOUR: chart primary #C2410C, secondary #0369A1, grid #E7E0D6, axis #57534E.
+
+------------------------------------------------------------------------
+15. Menu Management — Owner  ( /staff/menu, /staff/add-ons )
+------------------------------------------------------------------------
+
+LAYOUT:
+  Left: category list (add, rename, activate/deactivate). Right: items of the
+  selected category as a table (name, requires butcher toggle, available
+  toggle, sizes + prices). Edit opens a Dialog: item details, size rows
+  (label + price, add/remove), requires_butcher checkbox. Add-ons tab: table of
+  add-ons (name, price, available).
+  Rules: items/categories used in orders cannot be deleted — only
+  deactivated; a price edit shows "Applies to new orders only".
+SQL: INSERT/UPDATE/DELETE on menu_category, menu_item, menu_item_size, add_on.
+CRUD: Create, Read, Update, Delete (delete only if never ordered).
+COLOUR: toggles on #C2410C; destructive #B91C1C.
+
+------------------------------------------------------------------------
+16. Staff & Branches — Owner  ( /staff/employees, /staff/branches )
+------------------------------------------------------------------------
+
+LAYOUT:
+  Employees: table (name, role, level, branch, username, active). Add/Edit
+  Dialog: full name, NIC (13 digits), role, Senior/Junior, branch (blank for
+  owner/head office), username, initial password. Deactivate instead of
+  delete. Branches: table (code, name, phone, address, active) with Add/Edit
+  Dialog.
+SQL: INSERT/UPDATE/SELECT on employee and branch.
+CRUD: Create, Read, Update (soft delete via is_active).
+
+################################################################################
+## API Routes (Server-Side Business Logic)
+################################################################################
+
+  Every route: validate input with zod -> read session (except public routes)
+  -> requireRole([...]) -> scope by session branch_id -> call a function in
+  src/lib/queries or a stored procedure -> return typed JSON.
+
+  Public routes (no session): GET /api/menu · POST /api/orders/online ·
+  GET /api/tracking/[token] · POST /api/feedback.
+
+  Error format: { error: { code, message } } with correct HTTP status
+  (400 validation, 401 unauthenticated, 403 forbidden, 404, 409 conflict —
+  e.g. table already occupied / invalid status transition, 500). Database
+  constraint errors (SQLSTATE 23xxx, P0001 from RAISE EXCEPTION) are mapped to
+  friendly messages in one helper, src/lib/db/errors.ts.
+
+################################################################################
+## Security & Integrity Notes
+################################################################################
+
+  - Parameterised queries only (SQL-injection safe). Lint rule / code review:
+    no template-literal SQL with interpolated user input.
+  - Tracking tokens are 128-bit random (gen_random_uuid), unique, and the
+    tracking view exposes no personal data beyond the order itself.
+  - Role checks in every route handler; branch filter from the session only.
+  - The database enforces the rules even if the app is bypassed: CHECKs,
+    UNIQUEs, FKs, the approver trigger, the item-lock trigger, the numbering
+    trigger.
+  - Daily order numbers are allocated under an advisory lock, so two cashiers
+    placing orders at the same instant cannot receive the same number
+    (test with two pgAdmin Query Tool windows).
+  - Price snapshots (unit_price_at_order) protect history from price edits.
+  - Staff passwords: bcrypt. Session cookie: httpOnly, SameSite=Lax.
+  - Rate-limit the login route (simple in-memory counter: 5 failures / 10 min
+    per username + IP) and the public online-order route.
+
+################################################################################
+## Performance Notes
+################################################################################
+
+  - Server components for read-only pages; client components for carts,
+    polling queues and forms.
+  - Indexes (already in 01_tables.sql): customer_order(branch_id, order_date),
+    customer_order(order_status), order_item(order_id), order_item(size_id),
+    menu_item(category_id) and all UNIQUE constraints. Use EXPLAIN ANALYZE in
+    pgAdmin on the sales report query and include one screenshot.
+  - Single pg Pool (max 10). Never create a Pool per request.
+  - recharts is dynamically imported.
+  - Queue polling every 5 s only while the tab is visible.
+
+################################################################################
+## Accessibility & Usability
+################################################################################
+
+  - Visible labels on every field; required markers; understandable errors.
+  - Fully keyboard-operable forms, dialogs (focus trap), tabs and the rating
+    stars; visible focus ring (2px #C2410C + offset).
+  - Contrast >= 4.5:1; status never by colour alone (icon + text).
+  - Semantic landmarks, one h1 per page. Dates shown with PKT.
+  - aria-live region announces queue updates and toasts.
+
+################################################################################
+## Testing Plan
+################################################################################
+
+  SQL tests (db/05_test_queries.sql) — each has an expected outcome:
+    - Table numbers 10, 20, 0, -1 are rejected; 11 accepted.
+    - NIC with 12 digits / letters rejected; duplicate NIC rejected.
+    - Dine-in order without table rejected; online order with a table rejected;
+      online order without customer rejected.
+    - Cancelled order without approver/reason rejected; with a CASHIER as
+      approver rejected (trigger); with MANAGER/GRO accepted.
+    - Quantity 0, negative price, rating 6 rejected.
+    - Second payment for the same order rejected (UNIQUE).
+    - Bill numbers: three orders same branch/day -> ...-0001, -0002, -0003;
+      next day restarts at 0001; two branches independent.
+    - Price snapshot: change a menu price after ordering; old order total
+      unchanged.
+    - Editing order_item after BILLED rejected.
+  Unit (Vitest): money formatting, Pakistani phone validator, NIC validator,
+    status transition map.
+  Manual end-to-end (also the demo-video script):
+    1. Customer: browse menu -> online order (with add-ons) -> tracking page.
+    2. Cashier: confirm online order. Waiter: dine-in order for table 5.
+    3. Butcher marks meat lines done -> Chef marks ready -> Dispatch hands over.
+    4. Cashier: generate bill -> simulated payment -> order COMPLETED.
+    5. Customer: leave feedback.
+    6. Manager: cancel an order with approval; open sales report.
+    7. Owner: add a menu item and change a price.
+  Core flows verified on a 375px phone viewport and a 1280px desktop viewport.
+
+################################################################################
+## Report & Submission Mapping (due 10 December 2026, no extensions)
+################################################################################
+
+  Submission: (1) SQL script · (2) interview recording · (3) code as one ZIP ·
+  (4) report · (5) 2-3 minute demo video.
+
+  Report section                     Source in this project
+  ---------------------------------- ------------------------------------------
+  1 Title page                       Milestone 1 title page
+  2 Business scenario & research     Milestone 1 Chapter 1 (reuse)
+  3 Business rules & use cases       Milestone 1 Chapter 2 (reuse)
+  4 Data modelling / ER diagram      Milestone 1 Chapter 3 (reuse; update any
+                                     changes)
+  5 Database design & implementation Relational schema, 3NF, DDL snippets from
+                                     01_tables.sql, procedures/triggers/views
+                                     from 02/03, sample data from 04
+  6 Application design & flow        Stack + pg connection explanation,
+                                     wireframes (docs/wireframes), flow diagram
+  7 Screen-by-screen + SQL           The comment blocks in src/lib/queries/*
+                                     + page list above
+  8 Team contributions               See "Team Work Split" below
+
+------------------------------------------------------------------------
+Team Work Split (equal division — individual contribution is graded)
+------------------------------------------------------------------------
+
+  Suggested split by vertical area; adjust and record the final split here:
+    Member 1: customer side (menu, online order, tracking, feedback) +
+              branches/employees/auth screens
+    Member 2: order workflow (order entry, butcher/chef/dispatch queues,
+              cancel) + related procedures/triggers
+    Member 3: billing/simulated payment, tables, owner menu management,
+              sales report + views + seed data
+  Everyone writes the report sections for the screens they built and their
+  SQL tests.
+
+  NOTE: the course brief says "6-8 entities"; the Milestone 1 model has 13.
+  Confirm with the instructor that this is acceptable (the extra tables are
+  the dependent/associative tables and the proposed extensions) or be ready to
+  justify it in the report.
+
+################################################################################
+## Order of Work
+################################################################################
+
+PHASE A — DATABASE & BACKEND FIRST
+
+1.  Install PostgreSQL and pgAdmin 4. Create database afridi_inn and run
+    ALTER DATABASE afridi_inn SET timezone TO 'Asia/Karachi';
+
+2.  Run db/01_tables.sql in the pgAdmin Query Tool. Verify 13 tables exist.
+    Take a screenshot of the table list and generate the schema diagram with
+    pgAdmin's ERD tool (or dbdiagram.io) for the report.
+
+3.  Write and run db/02_triggers_functions.sql: order-number trigger,
+    approver-check trigger, updated_at trigger, item-lock trigger.
+
+4.  Write and run db/03_procedures_views.sql: sp_place_order,
+    sp_confirm_online_order, sp_advance_line, sp_dispatch_order,
+    sp_generate_bill, sp_record_payment, sp_cancel_order and all views.
+
+5.  Write and run db/04_seed.sql: 2 branches (e.g. KHI1 = IBA branch, KHI2),
+    owner + staff for every role (bcrypt hashes generated with a one-off
+    script), all menu categories with items, sizes, add-ons, tables (never
+    multiples of 10), customers and a spread of sample orders in every status.
+
+6.  Write and run db/05_test_queries.sql: every test in the Testing Plan, with
+    expected results. Save pgAdmin screenshots for the report. Fix the schema
+    or procedures until all pass.
+
+7.  Scaffold the Next.js project (App Router, TypeScript strict, Tailwind v4,
+    ESLint, Prettier). Install pg, bcryptjs, jose, zod, react-hook-form,
+    date-fns, date-fns-tz, lucide-react, sonner, recharts, vitest. Add
+    .env.example and .gitignore. Create src/lib/db/pool.ts and a
+    /api/health route that runs SELECT 1.
+
+8.  Build the auth backend: src/lib/auth/*, POST /api/auth/login and logout,
+    middleware.ts, requireRole() guard. Test with curl / Postman / Thunder
+    Client.
+
+9.  Build the query layer and API routes, in this order, testing each with
+    Postman/Thunder Client against the seeded database:
+      menu (public + owner CRUD) -> tables -> orders (list, dine-in create,
+      online create, detail, modify) -> kitchen flow (confirm, advance line,
+      dispatch) -> billing and simulated payment -> cancel with approver ->
+      tracking + feedback -> reports -> employees and branches.
+    Every query function gets its Screen/Purpose/CRUD comment block.
+
+10. Backend review: role matrix test (each role vs each route -> 403 where
+    denied), branch-scoping test (staff of KHI1 cannot read KHI2 orders),
+    SQL-injection spot checks, error-mapping helper. Backend is "done" when the
+    whole manual end-to-end script can be executed with API calls only.
+
+PHASE B — FRONTEND
+
+11. Set up globals.css (all CSS variables and @theme tokens), root layout with
+    next/font (Plus Jakarta Sans, Inter, JetBrains Mono), and the shared UI
+    components (Button, Card, Badge, Input, Select, Dialog, Tabs, Table,
+    StatusBadge, EmptyState, Skeleton, SimulatedPaymentBadge).
+
+12. Build the shells: public header/footer, staff sidebar + mobile tab bar,
+    staff login page, role-aware staff home.
+
+13. Build the customer side: landing, public menu, online order (cart +
+    checkout), confirmation page, tracking page with StatusStepper, feedback.
+
+14. Build staff order entry: orders list/online queue, dine-in order form,
+    order detail with modify and cancel dialog.
+
+15. Build the kitchen screens: butcher queue, kitchen queue, dispatch (with
+    polling).
+
+16. Build billing and the simulated payment panel, print stylesheet, and the
+    tables page.
+
+17. Build the owner screens: menu management, add-ons, employees, branches.
+
+18. Build the manager screens: sales report with filters, chart, CSV export,
+    feedback tab.
+
+19. Accessibility and responsive pass: 320 / 768 / 1024 / 1440 px, keyboard
+    navigation, contrast, reduced motion.
+
+20. Run the full manual end-to-end script and the Vitest suite. Capture
+    screenshots of every screen and its SQL for the report.
+
+21. Write the report (Sections 5-8), record the 2-3 minute demo video, export
+    the final SQL script (01-04 combined), zip the code (exclude node_modules,
+    .next, .env.local) and submit before 10 December 2026.
+
+##### This order must not be altered by any means #####
+
+################################################################################
+## Work Done
+################################################################################
+List everything done here. After each task completion update this list.
+
+1. Milestone 1 completed (per the submitted report): business scenario and
+   interview with Junaid Afridi, comparison of Toast POS and Square for
+   Restaurants, business rules and use cases, 13-entity data model with
+   cardinality and participation, Crow's Foot ER diagram, relational schema,
+   3NF justification, keys/constraints and the bill-number generation scheme.
+
+2. This instructions.txt created for the implementation phase: tech stack
+   fixed to Next.js + TypeScript + Tailwind CSS + PostgreSQL (pgAdmin) with
+   raw SQL through node-postgres and simulated payments; colour palette and
+   design system; role permission matrix; order workflow and status
+   transitions; planned stored procedures, triggers and views; folder
+   structure; page-by-page specifications; API routes; testing plan; report
+   mapping; and a 21-step Order of Work (database and backend first, then
+   frontend).
+
+3. db/01_tables.sql created: all 13 tables with primary/foreign/unique/check
+   constraints, indexes and a verification query. Ready to run in pgAdmin.
+
+4. db/02_triggers_functions.sql created:
+   - trg_assign_order_number (pg_advisory_xact_lock on branch_id + yyyymmdd, daily_order_number sequence, BRANCH-YYYYMMDD-NNNN bill_number, online tracking_token)
+   - trg_check_cancel_approver (enforces cancellation approved only by active MANAGER or GRO)
+   - trg_set_updated_at (maintains updated_at timestamp)
+   - trg_block_edit_after_bill (locks order_item and order_item_add_on edits once order is BILLED, COMPLETED, or CANCELLED)
+   - Verification query included. Ready to run in pgAdmin.
+
+5. Should use: DATABASE_URL=postgresql://afridi:afridi123@localhost:5432/afridi_inn
+
+================================================================================
