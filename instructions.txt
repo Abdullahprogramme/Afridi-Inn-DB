@@ -1167,6 +1167,11 @@ List everything done here. After each task completion update this list.
    - trg_block_edit_after_bill (locks order_item and order_item_add_on edits once order is BILLED, COMPLETED, or CANCELLED)
    - Verification query included. Ready to run in pgAdmin.
 
-5. Should use: DATABASE_URL=postgresql://afridi:afridi123@localhost:5432/afridi_inn
+5. db/03_procedures_views.sql created:
+   - Views: v_order_totals, v_menu_full, v_butcher_queue, v_kitchen_queue, v_sales_report, v_order_tracking
+   - Procedures/Functions: sp_place_order, sp_confirm_online_order, sp_advance_line, sp_dispatch_order, sp_generate_bill, sp_record_payment, sp_cancel_order
+   - Verification queries included. Ready to run in pgAdmin.
+
+6. Should use: DATABASE_URL=postgresql://afridi:afridi123@localhost:5432/afridi_inn
 
 ================================================================================

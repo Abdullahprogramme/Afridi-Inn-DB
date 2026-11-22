@@ -213,6 +213,11 @@ BEGIN
 
     -- If parent order exists and is in a finalized state, reject modification
     IF v_order_status IS NOT NULL AND v_order_status IN ('BILLED', 'COMPLETED', 'CANCELLED') THEN
+        -- Allow setting line_status to CANCELLED during order cancellation
+        IF TG_OP = 'UPDATE' AND NEW.line_status = 'CANCELLED' THEN
+            RETURN NEW;
+        END IF;
+
         RAISE EXCEPTION 'Cannot % line item: Order % is already in % status.',
             TG_OP, v_order_id, v_order_status;
     END IF;
