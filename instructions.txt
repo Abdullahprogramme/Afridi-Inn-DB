@@ -1050,92 +1050,324 @@ Team Work Split (equal division — individual contribution is graded)
 ## Order of Work
 ################################################################################
 
-PHASE A — DATABASE & BACKEND FIRST
+Revised 23 November 2026. Steps 1-4 are DONE and stay exactly as they are.
+The remaining work is split into THREE TRACKS that run in parallel:
 
-1.  Install PostgreSQL and pgAdmin 4. Create database afridi_inn and run
+  PERSON 1 = FRONTEND  (scaffold -> pages/paths -> all screens -> UI polish)
+  PERSON 2 = BACKEND A (orders and workflow)
+  PERSON 3 = BACKEND B (platform, money and insight)
+
+Step numbers (Step 5 ... Step 21) are the original numbers. Inside each track
+the tasks are written in the order they must be done.
+
+------------------------------------------------------------------------
+Rules that keep three people from blocking each other
+------------------------------------------------------------------------
+
+  1. FILE OWNERSHIP. Edit only the files you own (see the list below). A file
+     you do not own is read-only for you; ask the owner or send a small change.
+  2. CONTRACT BEFORE CODE. Person 2 and Person 3 each write the API contract
+     for their routes (method, path, allowed roles, request JSON, response
+     JSON, error codes) BEFORE coding the routes:
+        docs/api-contract-orders.md      (Person 2)
+        docs/api-contract-platform.md    (Person 3)
+     Person 1 builds screens against the contract using mock data.
+  3. MOCKS UNTIL CHECKED. A screen is switched from mock data to the real API
+     only after its backend slice has passed its Step 10 check.
+  4. NO EDITING DONE FILES. db/01, 02 and 03 are finished. Any fix goes in a
+     new numbered file: db/patches/NN_what_changed_P2.sql or ..._P3.sql
+     (hard rule 6). Order procedures/triggers belong to Person 2; views,
+     payment and constraints belong to Person 3.
+  5. GIT. One branch per person, merged into main at least once a day, small
+     commits. Rebase before merging. Tag the backend freeze: backend-v1.
+  6. ALL SQL stays raw and parameterised. Every query function carries its
+     Screen / Purpose / CRUD / Tables comment block.
+
+------------------------------------------------------------------------
+File ownership
+------------------------------------------------------------------------
+
+PERSON 1 (Frontend):
+  package.json, config files, .env.example, .gitignore, public/,
+  src/app/layout.tsx, src/styles/globals.css, ALL pages (src/app/**/page.tsx
+  and layout files, but NOT src/app/api/**), src/components/**, src/hooks/**,
+  src/types/**, src/lib/mocks/**, src/lib/api-client.ts, src/lib/constants.ts,
+  src/lib/utils.ts, tests/unit/ for UI utilities.
+  src/lib/db/pool.ts is created by Person 1 in Step 7, then owned by Person 3.
+
+PERSON 2 (Backend A):
+  src/app/api/orders/** EXCEPT the bill and pay folders, src/app/api/queues/**,
+  src/app/api/tracking/**, src/lib/queries/orders.ts, customer.ts,
+  src/lib/validators/orders.ts, db/04b_seed_orders.sql,
+  db/05a_tests_triggers_procedures.sql, db/patches/*_P2.sql,
+  docs/api-contract-orders.md, docs/postman/orders.json.
+
+PERSON 3 (Backend B):
+  src/app/api/auth/**, menu/**, tables/**, branches/**, employees/**,
+  feedback/**, reports/**, orders/[id]/bill/route.ts, orders/[id]/pay/route.ts,
+  src/lib/auth/**, src/lib/db/** (tx.ts, errors.ts, pool.ts), src/middleware.ts,
+  src/lib/queries/ branch.ts, employee.ts, menu.ts, tables.ts, payments.ts,
+  feedback.ts, reports.ts, src/lib/validators/ (all files except orders.ts),
+  db/04_seed.sql, db/05b_tests_constraints.sql, db/patches/*_P3.sql,
+  docs/api-contract-platform.md, docs/postman/platform.json.
+
+Validators are written by the backend owner of the route; the frontend imports
+them for form validation and never edits them.
+
+################################################################################
+## STEPS ALREADY DONE (unchanged)
+################################################################################
+
+[DONE] 1.  Install PostgreSQL and pgAdmin 4. Create database afridi_inn and run
     ALTER DATABASE afridi_inn SET timezone TO 'Asia/Karachi';
 
-2.  Run db/01_tables.sql in the pgAdmin Query Tool. Verify 13 tables exist.
-    Take a screenshot of the table list and generate the schema diagram with
-    pgAdmin's ERD tool (or dbdiagram.io) for the report.
+[DONE] 2.  Run db/01_tables.sql in the pgAdmin Query Tool. Verify 13 tables
+    exist. Take a screenshot of the table list and generate the schema diagram
+    with pgAdmin's ERD tool (or dbdiagram.io) for the report.
 
-3.  Write and run db/02_triggers_functions.sql: order-number trigger,
+[DONE] 3.  Write and run db/02_triggers_functions.sql: order-number trigger,
     approver-check trigger, updated_at trigger, item-lock trigger.
 
-4.  Write and run db/03_procedures_views.sql: sp_place_order,
+[DONE] 4.  Write and run db/03_procedures_views.sql: sp_place_order,
     sp_confirm_online_order, sp_advance_line, sp_dispatch_order,
     sp_generate_bill, sp_record_payment, sp_cancel_order and all views.
 
-5.  Write and run db/04_seed.sql: 2 branches (e.g. KHI1 = IBA branch, KHI2),
-    owner + staff for every role (bcrypt hashes generated with a one-off
-    script), all menu categories with items, sizes, add-ons, tables (never
-    multiples of 10), customers and a spread of sample orders in every status.
+################################################################################
+## PERSON 1 — FRONTEND  (Step 7 scaffold -> Step 21)
+################################################################################
 
-6.  Write and run db/05_test_queries.sql: every test in the Testing Plan, with
-    expected results. Save pgAdmin screenshots for the report. Fix the schema
-    or procedures until all pass.
+Uses the finished database work (Steps 3-4): the views v_menu_full,
+v_order_totals, v_butcher_queue, v_kitchen_queue, v_sales_report,
+v_order_tracking and the argument shape of sp_place_order (items jsonb) define
+the TypeScript types and the mock data, so this track never waits for the API.
 
-7.  Scaffold the Next.js project (App Router, TypeScript strict, Tailwind v4,
-    ESLint, Prettier). Install pg, bcryptjs, jose, zod, react-hook-form,
-    date-fns, date-fns-tz, lucide-react, sonner, recharts, vitest. Add
-    .env.example and .gitignore. Create src/lib/db/pool.ts and a
-    /api/health route that runs SELECT 1.
+F1  [Step 7] Scaffold the Next.js project (App Router, TypeScript strict,
+    Tailwind v4, ESLint, Prettier). Install pg, bcryptjs, jose, zod,
+    react-hook-form, date-fns, date-fns-tz, lucide-react, sonner, recharts,
+    vitest. Add .env.example (DATABASE_URL, SESSION_SECRET, NEXT_PUBLIC_APP_URL,
+    DEFAULT_BRANCH_CODE) and .gitignore. Create src/lib/db/pool.ts and
+    /api/health (SELECT 1).
+    >> PUSH TO MAIN ON DAY 1. Persons 2 and 3 cannot create routes until this
+       exists.
+    .env.local value: DATABASE_URL=postgresql://afridi:afridi123@localhost:5432/afridi_inn
 
-8.  Build the auth backend: src/lib/auth/*, POST /api/auth/login and logout,
-    middleware.ts, requireRole() guard. Test with curl / Postman / Thunder
-    Client.
+F2  [Step 7] Make every page path from the folder structure as a stub page.tsx
+    with a heading: public (/, /menu, /order, /order/confirmed, /track,
+    /track/[token], /feedback/[token]) and staff (/staff/login, /staff,
+    /staff/orders, /staff/orders/new, /staff/orders/[id], /staff/butcher,
+    /staff/kitchen, /staff/dispatch, /staff/tables, /staff/billing/[id],
+    /staff/reports, /staff/menu, /staff/add-ons, /staff/employees,
+    /staff/branches). Do NOT create anything under src/app/api/.
 
-9.  Build the query layer and API routes, in this order, testing each with
-    Postman/Thunder Client against the seeded database:
-      menu (public + owner CRUD) -> tables -> orders (list, dine-in create,
-      online create, detail, modify) -> kitchen flow (confirm, advance line,
-      dispatch) -> billing and simulated payment -> cancel with approver ->
-      tracking + feedback -> reports -> employees and branches.
-    Every query function gets its Screen/Purpose/CRUD comment block.
+F3  [Step 7] Types, mocks and constants. src/types/* from the views and
+    procedure shapes; src/lib/mocks/* (menu, orders in every status, tables,
+    queues, report rows); src/lib/api-client.ts with a NEXT_PUBLIC_USE_MOCKS
+    switch; src/lib/constants.ts (status maps, role map, formatMoney, rules).
+    Read docs/api-contract-*.md as soon as they appear and adjust the types.
 
-10. Backend review: role matrix test (each role vs each route -> 403 where
-    denied), branch-scoping test (staff of KHI1 cannot read KHI2 orders),
-    SQL-injection spot checks, error-mapping helper. Backend is "done" when the
-    whole manual end-to-end script can be executed with API calls only.
-
-PHASE B — FRONTEND
-
-11. Set up globals.css (all CSS variables and @theme tokens), root layout with
-    next/font (Plus Jakarta Sans, Inter, JetBrains Mono), and the shared UI
-    components (Button, Card, Badge, Input, Select, Dialog, Tabs, Table,
+F4  [Step 11] globals.css (all CSS variables and @theme tokens), root layout
+    with next/font (Plus Jakarta Sans, Inter, JetBrains Mono), and the shared
+    UI components (Button, Card, Badge, Input, Select, Dialog, Tabs, Table,
     StatusBadge, EmptyState, Skeleton, SimulatedPaymentBadge).
 
-12. Build the shells: public header/footer, staff sidebar + mobile tab bar,
-    staff login page, role-aware staff home.
+F5  [Step 12] Shells: public header/footer, staff sidebar + mobile tab bar,
+    staff login page, role-aware staff home. Login calls Person 3's
+    POST /api/auth/login (mock until Person 3 passes Step 10).
 
-13. Build the customer side: landing, public menu, online order (cart +
-    checkout), confirmation page, tracking page with StatusStepper, feedback.
+F6  [Step 13] Customer side: landing, public menu, online order (menu picker,
+    cart + checkout), confirmation page, tracking page with StatusStepper,
+    feedback page. The menu picker and cart are built once and reused in F7.
 
-14. Build staff order entry: orders list/online queue, dine-in order form,
+F7  [Step 14] Staff order entry: orders list/online queue, dine-in order form,
     order detail with modify and cancel dialog.
 
-15. Build the kitchen screens: butcher queue, kitchen queue, dispatch (with
-    polling).
+F8  [Step 15] Kitchen screens: butcher queue, kitchen queue, dispatch (with
+    5-second polling). Read the line-status flow in the order contract first.
 
-16. Build billing and the simulated payment panel, print stylesheet, and the
-    tables page.
+F9  [Step 16] Billing page and the simulated payment panel, print stylesheet,
+    and the tables page.
 
-17. Build the owner screens: menu management, add-ons, employees, branches.
+F10 [Step 17] Owner screens: menu management, add-ons, employees, branches.
 
-18. Build the manager screens: sales report with filters, chart, CSV export,
+F11 [Step 18] Manager screens: sales report with filters, chart, CSV export,
     feedback tab.
 
-19. Accessibility and responsive pass: 320 / 768 / 1024 / 1440 px, keyboard
-    navigation, contrast, reduced motion.
+F12 [Step 19] Accessibility and responsive pass: 320 / 768 / 1024 / 1440 px,
+    keyboard navigation, contrast, reduced motion. Fix the bug lists sent by
+    Persons 2 and 3.
 
-20. Run the full manual end-to-end script and the Vitest suite. Capture
-    screenshots of every screen and its SQL for the report.
+F13 [Step 20] Switch every screen to the real API (only slices that passed
+    Step 10), then run the full manual end-to-end script on 375 px and 1280 px
+    with Persons 2 and 3. Capture screenshots of every screen and its SQL.
 
-21. Write the report (Sections 5-8), record the 2-3 minute demo video, export
-    the final SQL script (01-04 combined), zip the code (exclude node_modules,
-    .next, .env.local) and submit before 10 December 2026.
+F14 [Step 21] Zip the code (exclude node_modules, .next, .env.local). Write the
+    report sections for the screens and the application design (Sections 6-7).
 
-##### This order must not be altered by any means #####
+NICE-TO-HAVES, DONE LAST IF TIME IS SHORT: CSV export, print stylesheet,
+5-second polling refinements.
+
+################################################################################
+## PERSON 2 — BACKEND A: ORDERS AND WORKFLOW
+################################################################################
+
+B1  [Step 9 prep] Write docs/api-contract-orders.md for every route you own
+    (list, dine-in create, online create, detail, modify, confirm, advance
+    line, dispatch, cancel, queues, tracking). Include the line-status flow:
+    PENDING -> AT_BUTCHER -> BUTCHER_DONE -> COOKING -> READY for meat lines,
+    PENDING -> COOKING -> READY for others. Publish on Day 1.
+
+B2  [Step 6, part A] db/05a_tests_triggers_procedures.sql. Each test states its
+    expected result and uses its own rows inside BEGIN ... ROLLBACK, so it does
+    not need the seed:
+      - bill numbers: three orders, same branch and day -> -0001, -0002,
+        -0003; next day restarts at 0001; two branches independent
+      - concurrency: two pgAdmin Query Tool windows place orders at once, no
+        duplicate number
+      - approver trigger: CASHIER rejected, MANAGER and GRO accepted
+      - cancelled order needs approver and reason
+      - editing order_item after BILLED rejected
+      - price snapshot: change a menu price after ordering, old total unchanged
+      - dine-in without table rejected, online with table rejected
+      - every sp_* procedure end to end, invalid status transitions rejected
+    Fix problems with db/patches/NN_..._P2.sql. Save pgAdmin screenshots.
+
+B3  [Step 5, part B] db/04b_seed_orders.sql, written AFTER Person 3's
+    db/04_seed.sql is merged: customers and a spread of sample orders in every
+    status (PLACED, AT_BUTCHER, AT_CHEF, READY, DISPATCHED, BILLED, COMPLETED,
+    CANCELLED) over several days and both branches, created by calling the
+    sp_* procedures (never by direct INSERT into customer_order). Add payment
+    and feedback rows for the COMPLETED orders.
+
+B4  [Step 9] Orders query layer and routes, in this order, each tested in
+    Postman / Thunder Client against the seeded database:
+      1. GET /api/orders (list, branch-scoped) and GET /api/orders/[id]
+      2. POST /api/orders (dine-in) and POST /api/orders/online (public,
+         rate-limited)
+      3. PATCH /api/orders/[id] (modify before billing)
+      4. confirm, lines/[lineId] (advance), dispatch
+      5. GET /api/queues/butcher, /kitchen, /dispatch (new routes, they use
+         v_butcher_queue and v_kitchen_queue)
+      6. cancel with approver (username + password, MANAGER or GRO; the DB
+         trigger re-checks)
+      7. GET /api/tracking/[token] (public, v_order_tracking only)
+    Put the zod schemas in src/lib/validators/orders.ts. Every query function
+    gets its Screen / Purpose / CRUD / Tables comment block. Export
+    docs/postman/orders.json.
+
+B5  [Step 10] Self-check of your own routes using the Step 10 checklist below.
+
+B6  [Step 10] FULL CHECK OF PERSON 3'S SLICE (independent re-test, not a
+    re-read): run docs/postman/platform.json and the Step 10 checklist against
+    auth, menu, tables, billing, feedback, reports, employees, branches. Report
+    defects to Person 3 in writing; re-test after the fix.
+
+B7  [After backend freeze] Test the order screens built by Person 1 (bug list
+    only, do not edit frontend files). Write Vitest tests for orders.ts
+    validators and the status-transition map. Write report Section 5 parts
+    for your triggers/procedures, with screenshots of 05a results.
+
+################################################################################
+## PERSON 3 — BACKEND B: PLATFORM, MONEY AND INSIGHT
+################################################################################
+
+C1  [Step 9 prep] Write docs/api-contract-platform.md for every route you own
+    (auth, menu, tables, branches, employees, bill, pay, feedback, reports).
+    Publish on Day 1.
+
+C2  [Step 5, part A] db/04_seed.sql (reference data). DO THIS FIRST: everyone
+    needs it. 2 branches (KHI1 = IBA branch, KHI2); owner (branch NULL) and
+    staff for every role at both branches; ONE bcrypt hash for the shared demo
+    password "Afridi@2026" generated with a one-off script and reused; all menu
+    categories with items, sizes (requires_butcher set correctly), add-ons;
+    tables (never multiples of 10). Merge to main at once.
+
+C3  [Step 6, part B] db/05b_tests_constraints.sql, each test with its expected
+    result: table numbers 10, 20, 0, -1 rejected and 11 accepted; NIC with 12
+    digits or letters rejected, duplicate NIC rejected; quantity 0, negative
+    price, rating 6 rejected; second payment for the same order rejected.
+    Fix problems with db/patches/NN_..._P3.sql. Save pgAdmin screenshots.
+
+C4  [Step 8] Auth backend and shared libraries:
+      - src/lib/db/tx.ts (withTransaction) and errors.ts (SQLSTATE 23xxx and
+        P0001 mapped to friendly 4xx messages)
+      - src/lib/auth/session.ts (jose JWT, httpOnly SameSite=Lax cookie,
+        8 hours), guards.ts, roles.ts, password.ts (bcryptjs, cost 10)
+      - requireRole([...]) with its FINAL signature pushed first (Day 2), so
+        Person 2 can code against it before login is finished
+      - POST /api/auth/login (inactive users refused, login rate limit) and
+        POST /api/auth/logout, src/middleware.ts for /staff/**
+    Test with curl / Postman / Thunder Client.
+
+C5  [Step 9] Platform query layer and routes, in this order, each tested
+    against the seeded database:
+      1. menu (public GET, owner CRUD)  2. tables  3. orders/[id]/bill and
+      orders/[id]/pay (sp_generate_bill, sp_record_payment, simulated)
+      4. feedback (public POST, staff GET)  5. reports/sales
+      6. employees and branches (owner only; deactivate, never delete)
+    Zod schemas in src/lib/validators/. Every query function gets its
+    Screen / Purpose / CRUD / Tables comment block. Export
+    docs/postman/platform.json.
+
+C6  [Step 10] Self-check of your own routes using the Step 10 checklist below.
+
+C7  [Step 10] FULL CHECK OF PERSON 2'S SLICE (independent re-test, not a
+    re-read): run docs/postman/orders.json and the Step 10 checklist against
+    all order routes, queues and tracking. Report defects to Person 2 in
+    writing; re-test after the fix.
+
+C8  [After backend freeze] Test the billing, owner and report screens built by
+    Person 1 (bug list only, do not edit frontend files). Write Vitest tests
+    for the phone and NIC validators. Run EXPLAIN ANALYZE on the sales report
+    query and keep the screenshot. Write report Section 5 parts for the schema,
+    constraints and views, with screenshots of 05b results.
+
+################################################################################
+## STEP 10 — FULL BACKEND CHECK (done twice: by the owner, then by the other)
+################################################################################
+
+  1. Role matrix: every role against every route of the slice; each denied
+     route returns 403, each unauthenticated call returns 401.
+  2. Branch scoping: a KHI1 staff member cannot read or change KHI2 orders,
+     tables or queues; the branch always comes from the session.
+  3. SQL injection: a quote / "'; DROP TABLE x; --" payload in every string
+     parameter; nothing breaks, nothing is concatenated into SQL.
+  4. Error mapping: constraint and trigger violations come back as a clear 4xx
+     message, never a raw 500.
+  5. db/05a and db/05b run clean in pgAdmin with the expected results.
+  6. The whole manual end-to-end script (see Testing Plan) runs with API calls
+     only: online order -> confirm -> butcher -> chef -> dispatch -> bill ->
+     simulated payment -> completed -> feedback; then a cancellation with
+     approval; then the sales report.
+  7. Both backend people sign off in writing, then tag backend-v1.
+  "Backend is done" only when the owner AND the checker have signed off.
+
+################################################################################
+## SYNC POINTS AND TIMELINE  (deadline 10 December 2026, no extensions)
+################################################################################
+
+  Sync points (the only places anyone waits):
+    S1  Day 1  Person 1 pushes the scaffold (F1).
+                Until then Persons 2 and 3 do SQL work (B2, C2, C3) and
+                write their contracts (B1, C1).
+    S2  Day 1-2  Person 3 merges the reference seed (C2).
+    S3  Day 2  Person 3 pushes requireRole() signature (C4).
+    S4  Step 10  Each backend slice checked by the other person.
+    S5  30 Nov  Backend freeze, tag backend-v1.
+
+  Target dates:
+    23-24 Nov  F1-F3 | B1-B3 | C1-C3, C4 starts
+    25-26 Nov  F4 (step 11), F5 | B4 items 1-2 | C4, C5 items 1-2
+    27-28 Nov  F6 | B4 items 3-5 | C5 item 3
+    29 Nov     F7 starts | B4 items 6-7 | C5 items 4-6
+    30 Nov     Step 10 cross-check, freeze
+    1-4 Dec    F7-F11 (screens move from mocks to the real API as they pass)
+    5-7 Dec    F12 (Step 19), bug lists from B7 and C8
+    8 Dec      F13 (Step 20) full end-to-end run
+    9 Dec      Step 21: report, demo video, zip, final SQL (01-04b combined);
+               submit this evening. 10 Dec is the buffer.
+  Report Sections 2-4 reuse Milestone 1 and can be written by anyone in gaps.
+
+##### Step numbers and the order inside each track must not be altered. #####
 
 ################################################################################
 ## Work Done
@@ -1173,5 +1405,20 @@ List everything done here. After each task completion update this list.
    - Verification queries included. Ready to run in pgAdmin.
 
 6. Should use: DATABASE_URL=postgresql://afridi:afridi123@localhost:5432/afridi_inn
+
+7. Team division revised (23 Nov 2026): one frontend track (Person 1, scaffold
+   to final UI) and two backend tracks (Person 2 orders/workflow, Person 3
+   platform/money/insight) with independent cross-checking in Step 10.
+   Steps 1-4 unchanged. Seed split into db/04_seed.sql (Person 3) and
+   db/04b_seed_orders.sql (Person 2); SQL tests split into
+   db/05a_tests_triggers_procedures.sql (Person 2) and
+   db/05b_tests_constraints.sql (Person 3); queue endpoints
+   (/api/queues/butcher|kitchen|dispatch) added; db/patches/ added for fixes.
+
+8. F1 completed (Person 1): Next.js project scaffolded (App Router, TypeScript
+   strict, Tailwind v4, ESLint, Prettier), dependencies installed (pg, bcryptjs,
+   jose, zod, react-hook-form, date-fns, date-fns-tz, lucide-react, sonner,
+   recharts, vitest), .env.example, .gitignore, src/lib/db/pool.ts, /api/health
+   route (SELECT 1), and smoke tests passing. Ready for team branches.
 
 ================================================================================
