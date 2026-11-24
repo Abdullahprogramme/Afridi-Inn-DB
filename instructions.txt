@@ -1421,4 +1421,12 @@ List everything done here. After each task completion update this list.
    recharts, vitest), .env.example, .gitignore, src/lib/db/pool.ts, /api/health
    route (SELECT 1), and smoke tests passing. Ready for team branches.
 
+9. F2, F3, F4, F5, F6 completed (Person 1):
+   - F2: Created all 22 page paths (public & staff) with stub pages.
+   - F3: Domain & view TypeScript types (src/types/index.ts), business rules & constants (src/lib/constants.ts), formatting & validators (src/lib/utils.ts), rich mock data (src/lib/mocks/index.ts), and mock-aware API client (src/lib/api-client.ts).
+   - F4: Design system tokens & CSS variables in src/styles/globals.css, root layout with next/font (Plus Jakarta Sans, Inter, JetBrains Mono) & Sonner Toaster, and shared UI components (Button, Card, Badge, Input, Select, Dialog, Tabs, Table, StatusBadge, EmptyState, Skeleton, SimulatedPaymentBadge).
+   - F5: Shell layouts (PublicHeader, PublicFooter, StaffSidebar, MobileTabBar, staff layout wrapper), Staff Login page (/staff/login), and role-aware Staff Home dashboard (/staff).
+   - F6: Complete customer experience: Landing page (/), Full Menu with categories & search (/menu), Online Ordering with customization modal & live Cart (/order), Confirmation screen with token copy (/order/confirmed), Live Order Tracking with StatusStepper (/track & /track/[token]), Customer Feedback form (/feedback/[token]).
+   - Vitest unit tests passed (7/7 tests passing). Next.js production build verified for all 24 routes.
+
 ================================================================================
